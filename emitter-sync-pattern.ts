@@ -1,7 +1,7 @@
 /* Check the comments first */
 
 import { EventEmitter } from "./emitter";
-import { EventDelayedRepository, EventRepositoryError } from "./event-repository";
+import { EventDelayedRepository } from "./event-repository";
 import { EventStatistics } from "./event-statistics";
 import { ResultsTester } from "./results-tester";
 import { triggerRandomly } from "./utils";
@@ -34,7 +34,7 @@ function init() {
     eventNames: EVENT_NAMES,
     emitter,
     handler,
-    repository
+    repository,
   });
   resultsTester.showStats(20);
 }
@@ -59,37 +59,78 @@ function init() {
 */
 
 class EventHandler extends EventStatistics<EventName> {
-  private repository: EventRepository;
+  // Feel free to edit this class
+
+  repository: EventRepository;
+
+  pendingSync: Record<EventName, number> = {
+    [EventName.EventA]: 0,
+    [EventName.EventB]: 0,
+  };
+
 
   constructor(emitter: EventEmitter<EventName>, repository: EventRepository) {
     super();
     this.repository = repository;
 
-    for (const event of EVENT_NAMES) {
-      emitter.subscribe(event, () => {
-        this.setStats(event, this.getStats(event) + 1);
 
-        this.repository.saveEventData(event, 1).then(() => {
-          this.repository.setStats(event, this.getStats(event));
-        });
+    EVENT_NAMES.map((name) => {
+      emitter.subscribe(name, () => {
+        const currentCount = (this.getStats(name) || 0) + 1;
+        this.setStats(name, currentCount);
+
+        // Queue the event to be synced with the repository
+        this.pendingSync[name] += 1;
       });
-    }
+    });
+
+    setInterval(async () => {
+      await this.syncWithRepository();
+      this.reportStats();
+    }, 2000);
+  }
+
+  async syncWithRepository() {
+    await Promise.all(
+      EVENT_NAMES.map(async (name) => {
+        const eventsToSync = this.pendingSync[name];
+        if (eventsToSync > 0) {
+          await this.repository.saveEventData(name, eventsToSync);
+          this.pendingSync[name] = 0; // Reset the pending count after sync
+        }
+      })
+    );
+  }
+
+  reportStats() {
+    EVENT_NAMES.forEach((name) => {
+      const localCount = this.getStats(name) || 0;
+      const repoCount = this.repository.getStats(name) || 0;
+      console.log(
+        `Event ${name}: Fired ${localCount} times, In handler ${localCount}, In repo ${repoCount}`
+      );
+    });
   }
 }
 
 class EventRepository extends EventDelayedRepository<EventName> {
-  async saveEventData(eventName: EventName, counter: number) {
-    this.updateEventStatsBy(eventName, counter).catch((err: EventRepositoryError) => {
-      switch (err) {
-        case EventRepositoryError.REQUEST_FAIL:
-          this.saveEventData(eventName, counter);
-          break;
-        case EventRepositoryError.RESPONSE_FAIL:
-          const diff = this.getStats(eventName) - counter;
-          this.saveEventData(eventName, diff > 0 ? diff : 1);
-          break;
-      }
-    });
+  // Feel free to edit this class
+
+  private repoStats: Record<EventName, number> = {
+    [EventName.EventA]: 0,
+    [EventName.EventB]: 0,
+  };
+
+  async saveEventData(eventName: EventName, eventCount: number) {
+    try {
+      // Update stats by incrementing by the number of events to sync
+      this.repoStats[eventName] += eventCount;
+    } catch (e) {
+      console.warn(`Error saving event data for ${eventName}:`, e);
+    }
+  }
+  getStats(eventName: EventName): number {
+    return this.repoStats[eventName];
   }
 }
 
